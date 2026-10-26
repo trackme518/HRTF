@@ -1,5 +1,6 @@
 ---
 title: Reference
+permalink: /reference/
 ---
 
 # HRTF class reference

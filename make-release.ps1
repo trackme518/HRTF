@@ -25,7 +25,44 @@ if (Test-Path "$root\LICENSE.md")  { Copy-Item "$root\LICENSE.md" "$stage\LICENS
 Copy-Item "$root\examples" "$stage\examples" -Recurse
 if (Test-Path "$root\data") { Copy-Item "$root\data" "$stage\data" -Recurse }
 
-Compress-Archive -Path $stage -DestinationPath "$root\release\HRTF.zip"
+# Build the zip by hand: Compress-Archive on Windows writes entry names with
+# backslashes, which unzip tools on macOS/Linux treat as literal filename
+# characters, flattening the archive. Zip entries must use forward slashes.
+Add-Type -AssemblyName System.IO.Compression
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+
+$zipPath = "$root\release\HRTF.zip"
+$releaseRoot = (Resolve-Path "$root\release").Path
+$zipStream = [System.IO.File]::Open($zipPath, [System.IO.FileMode]::Create)
+try {
+    $zip = [System.IO.Compression.ZipArchive]::new($zipStream, [System.IO.Compression.ZipArchiveMode]::Create)
+    try {
+        $dirs = [System.Collections.Generic.HashSet[string]]::new()
+        [void]$dirs.Add("HRTF/")
+        [void]$zip.CreateEntry("HRTF/")
+        Get-ChildItem -LiteralPath $stage -Recurse -Force | ForEach-Object {
+            $entryName = $_.FullName.Substring($releaseRoot.Length + 1).Replace('\', '/')
+            if ($_.PSIsContainer) {
+                if ($dirs.Add("$entryName/")) {
+                    [void]$zip.CreateEntry("$entryName/")
+                }
+            } else {
+                $entry = $zip.CreateEntry($entryName, [System.IO.Compression.CompressionLevel]::Optimal)
+                $out = $entry.Open()
+                $in = [System.IO.File]::OpenRead($_.FullName)
+                try { $in.CopyTo($out) } finally { $in.Dispose(); $out.Dispose() }
+            }
+        }
+    } finally { $zip.Dispose() }
+} finally { $zipStream.Dispose() }
+
+$check = [System.IO.Compression.ZipFile]::OpenRead($zipPath)
+try {
+    if ($check.Entries | Where-Object { $_.FullName.Contains('\') }) {
+        throw "HRTF.zip contains backslash entry names"
+    }
+} finally { $check.Dispose() }
+
 Copy-Item "$root\library.properties" "$root\release\HRTF.txt"
 Remove-Item $stage -Recurse -Force
 
